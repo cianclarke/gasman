@@ -47,10 +47,9 @@ class Dashboard:
             log.warning("No GT tmux socket found matching '%s'", self.config.tmux_socket_glob)
             log.info("Waiting for tmux socket to appear...")
 
-        # Spawn panes for any already-running polecats
-        initial_sessions = self.watcher._get_polecat_sessions()
-        for name in sorted(initial_sessions):
-            await self._spawn_pane(name)
+        # Do NOT scan for existing polecat sessions on startup.
+        # Only react to NEW sessions appearing after gasman starts.
+        # The watcher seeds _known_sessions so existing sessions are ignored.
 
         log.info(
             "Dashboard started. Watching for polecats (socket pattern: %s, poll: %.1fs)",
@@ -109,11 +108,12 @@ class Dashboard:
             attach_cmd = f"tmux -L {socket} attach-session -t {session_name} -r"
             await new_session.async_send_text(attach_cmd + "\n")
 
-            # Set the pane title
+            # Set the pane title and prevent tmux from overriding it
             await new_session.async_set_name(session_name)
+            profile = await new_session.async_get_profile()
+            await profile.async_set_allow_title_setting(False)
 
             # Apply font size if configured
-            profile = await new_session.async_get_profile()
             if self.config.font_size:
                 await profile.async_set_normal_font_size(self.config.font_size)
 
