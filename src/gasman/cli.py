@@ -6,6 +6,7 @@ import argparse
 import logging
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -36,14 +37,29 @@ def setup_logging(verbose: bool = False):
     logging.basicConfig(level=level, handlers=[handler])
 
 
+def _find_gasman_script() -> str:
+    """Find the gasman console script installed in the current environment."""
+    # Prefer the script next to the running Python interpreter (same venv)
+    venv_script = Path(sys.executable).parent / "gasman"
+    if venv_script.is_file():
+        return str(venv_script)
+    # Fall back to PATH lookup
+    found = shutil.which("gasman")
+    if found:
+        return found
+    # Last resort: invoke via python -m (may fail without __main__.py)
+    return f"{sys.executable} -m gasman"
+
+
 def _build_foreground_cmd(args) -> str:
     """Build the 'gasman start --foreground' command string from current args."""
-    parts = [sys.executable, "-m", "gasman", "start", "--foreground"]
+    gasman_bin = _find_gasman_script()
+    parts = [gasman_bin, "start", "--foreground"]
     if args.verbose:
-        parts.insert(3, "--verbose")
+        parts.insert(1, "--verbose")
     if args.config:
-        parts.insert(3, "--config")
-        parts.insert(4, args.config)
+        parts.insert(1, "--config")
+        parts.insert(2, args.config)
     if args.poll:
         parts.extend(["--poll", str(args.poll)])
     if args.font_size:
