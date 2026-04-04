@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import logging
 import os
 import signal
@@ -55,7 +54,7 @@ def cmd_start(args):
     from .iterm_dashboard import run_dashboard
 
     try:
-        asyncio.run(run_dashboard(config))
+        run_dashboard(config)
     except KeyboardInterrupt:
         log.info("Shutting down.")
     finally:

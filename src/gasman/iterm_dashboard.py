@@ -140,11 +140,11 @@ class Dashboard:
         self.watcher.stop()
 
 
-async def run_dashboard(config: Config):
+def run_dashboard(config: Config):
     """Main entry point: connect to iTerm2 and run the dashboard."""
     log.info("Connecting to iTerm2...")
 
-    async with iterm2.Connection() as connection:
+    async def _main(connection: iterm2.Connection):
         dashboard = Dashboard(config, connection)
         try:
             await dashboard.start()
@@ -154,3 +154,5 @@ async def run_dashboard(config: Config):
         except KeyboardInterrupt:
             dashboard.stop()
             log.info("Dashboard stopped by user.")
+
+    iterm2.run_until_complete(_main)
