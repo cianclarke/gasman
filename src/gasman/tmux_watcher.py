@@ -11,8 +11,6 @@ from .config import Config, find_tmux_socket, is_polecat_session
 
 log = logging.getLogger(__name__)
 
-SPECIAL_DASHBOARD_SESSIONS = {"hq-mayor"}
-
 
 @dataclass
 class SessionEvent:
@@ -97,25 +95,24 @@ class TmuxWatcher:
             self._socket_name = find_tmux_socket(self.config.tmux_socket_glob)
         return self._socket_name
 
-    def _get_dashboard_sessions(self) -> set[str]:
-        """Get the current set of sessions that should have dashboard panes.
+    def _get_polecat_sessions(self) -> set[str]:
+        """Get the current set of actively working polecat sessions.
 
-        Polecats are shown only while they are actively running work. Mayor is a
-        special case: if the session exists, it should always be attached as
-        part of the main dashboard layout.
+        Filters out sessions that match polecat naming but are idle
+        (no active agent process running).
         """
         socket = self._find_socket()
         if not socket:
             return set()
         all_sessions = list_tmux_sessions(socket)
-        dashboard_sessions = {s for s in all_sessions if s in SPECIAL_DASHBOARD_SESSIONS}
         polecats = {s for s in all_sessions if is_polecat_session(s, self.config)}
+        active = set()
         for s in polecats:
             if is_session_active(socket, s):
-                dashboard_sessions.add(s)
+                active.add(s)
             else:
                 log.debug("Filtering stale polecat session: %s", s)
-        return dashboard_sessions
+        return active
 
     async def watch(self, callback):
         """Watch for session changes, calling callback(SessionEvent) on each.
@@ -124,8 +121,8 @@ class TmuxWatcher:
             callback: async callable that receives SessionEvent objects.
         """
         self._running = True
-        self._known_sessions = self._get_dashboard_sessions()
-        log.info("Initial dashboard sessions: %s", self._known_sessions)
+        self._known_sessions = self._get_polecat_sessions()
+        log.info("Initial polecat sessions: %s", self._known_sessions)
 
         for name in sorted(self._known_sessions):
             await callback(SessionEvent(name=name, event_type="spawn"))
@@ -139,7 +136,7 @@ class TmuxWatcher:
                 if self._socket_name is None:
                     continue
 
-            current = self._get_dashboard_sessions()
+            current = self._get_polecat_sessions()
 
             # Detect new sessions (spawns)
             spawned = current - self._known_sessions

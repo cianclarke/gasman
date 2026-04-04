@@ -25,8 +25,9 @@ class Dashboard:
         self.config = config
         self.connection = connection
         self.watcher = TmuxWatcher(config)
-        # Maps polecat session name -> iTerm2 session ID (pane)
+        # Maps attached session name -> iTerm2 session ID (pane)
         self._pane_map: dict[str, str] = {}
+        self._split_base_session: iterm2.Session | None = None
 
     async def start(self):
         """Start the dashboard: begin watching for polecats."""
@@ -37,6 +38,17 @@ class Dashboard:
             return
 
         self._window = window
+        tab = window.current_tab
+        if not tab:
+            log.error("No current tab available")
+            return
+
+        self._split_base_session = tab.current_session
+        if not self._split_base_session:
+            log.error("No current session available")
+            return
+
+        await self._open_mayor_pane()
 
         socket = self.watcher.socket_name
         if not socket:
@@ -49,6 +61,16 @@ class Dashboard:
 
         await self.watcher.watch(self._handle_event)
 
+    async def _open_mayor_pane(self):
+        """Create the initial Mayor pane in the dashboard layout."""
+        if "hq-mayor" in self._pane_map:
+            return
+
+        await self._open_pane(
+            "hq-mayor",
+            command="GASTOWN_DISABLED=1 gt mayor attach",
+        )
+
     async def _handle_event(self, event: SessionEvent):
         """Handle a polecat spawn or exit event."""
         if event.event_type == "spawn":
@@ -56,57 +78,47 @@ class Dashboard:
         elif event.event_type == "exit":
             await self._close_pane(event.name)
 
-    async def _open_pane(self, session_name: str):
-        """Create a new iTerm2 vertical split pane for a polecat session."""
+    async def _open_pane(self, session_name: str, command: str | None = None):
+        """Create a new iTerm2 vertical split pane for a dashboard session."""
         if session_name in self._pane_map:
             return
 
-        socket = self.watcher.socket_name
-        if not socket:
-            log.warning("Cannot open pane for %s: no tmux socket", session_name)
-            return
-
         try:
-            app = await iterm2.async_get_app(self.connection)
-            window = app.current_terminal_window
-            if not window:
-                log.error("No iTerm2 window available")
-                return
-
-            # Get the current session to split from
-            tab = window.current_tab
-            if not tab:
-                log.error("No current tab available")
-                return
-
-            current_session = tab.current_session
-            if not current_session:
-                log.error("No current session available")
+            base_session = self._split_base_session
+            if not base_session:
+                log.error("No split base session available")
                 return
 
             # Create a vertical split pane to the right.
             # GASTOWN_DISABLED=1 prevents the shell profile from triggering
             # GT hooks that would launch unwanted agent sessions.
-            pane = await current_session.async_split_pane(vertical=True)
+            pane = await base_session.async_split_pane(vertical=True)
 
-            # Set window-size to largest so the pane fills properly
-            # instead of being constrained to the original session size.
-            tmux_cmd = (
-                f"tmux -L {socket} set-option -t {session_name} "
-                f"window-size largest 2>/dev/null; "
-                f"GASTOWN_DISABLED=1 tmux -L {socket} "
-                f"attach-session -t {session_name}"
-            )
-            await pane.async_send_text(tmux_cmd + "\n")
+            attach_cmd = command or self._tmux_attach_command(session_name)
+            await pane.async_send_text(attach_cmd + "\n")
 
             # Set pane title
             await pane.async_set_name(session_name)
 
             self._pane_map[session_name] = pane.session_id
-            log.info("New polecat pane: %s", session_name)
+            self._split_base_session = pane
+            log.info("Attached pane: %s", session_name)
 
         except Exception:
             log.exception("Failed to open pane for %s", session_name)
+
+    def _tmux_attach_command(self, session_name: str) -> str:
+        """Build the tmux attach command for a session pane."""
+        socket = self.watcher.socket_name
+        if not socket:
+            raise RuntimeError(f"Cannot open pane for {session_name}: no tmux socket")
+
+        return (
+            f"tmux -L {socket} set-option -t {session_name} "
+            f"window-size largest 2>/dev/null; "
+            f"GASTOWN_DISABLED=1 tmux -L {socket} "
+            f"attach-session -t {session_name}"
+        )
 
     async def _close_pane(self, session_name: str):
         """Close the iTerm2 pane for a finished polecat."""

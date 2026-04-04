@@ -22,19 +22,19 @@ class TmuxWatcherTests(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(
             watcher,
-            "_get_dashboard_sessions",
-            side_effect=[{"hq-mayor", "ga-jasper"}],
+            "_get_polecat_sessions",
+            side_effect=[{"ga-jasper", "ga-onyx"}],
         ):
             await watcher.watch(callback)
 
         self.assertEqual(
             events,
-            [("spawn", "ga-jasper"), ("spawn", "hq-mayor")],
+            [("spawn", "ga-jasper"), ("spawn", "ga-onyx")],
         )
 
     @patch("gasman.tmux_watcher.is_session_active")
     @patch("gasman.tmux_watcher.list_tmux_sessions")
-    def test_dashboard_sessions_keep_mayor_but_filter_idle_polecats(
+    def test_polecat_sessions_filter_idle_entries(
         self,
         list_tmux_sessions,
         is_session_active,
@@ -46,8 +46,8 @@ class TmuxWatcherTests(unittest.IsolatedAsyncioTestCase):
         is_session_active.side_effect = lambda socket, session: session == "ga-jasper"
 
         self.assertEqual(
-            watcher._get_dashboard_sessions(),
-            {"hq-mayor", "ga-jasper"},
+            watcher._get_polecat_sessions(),
+            {"ga-jasper"},
         )
 
 
