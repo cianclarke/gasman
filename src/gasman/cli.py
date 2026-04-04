@@ -101,17 +101,23 @@ def cmd_status(args):
     print(f"Tmux socket: {socket or 'not found'}")
 
     if socket:
-        from .tmux_watcher import list_tmux_sessions
+        from .tmux_watcher import list_tmux_sessions, is_session_active
         from .config import is_polecat_session
 
         all_sessions = list_tmux_sessions(socket)
         polecats = {s for s in all_sessions if is_polecat_session(s, config)}
+        active = {s for s in polecats if is_session_active(socket, s)}
+        stale = polecats - active
         infra = all_sessions - polecats
 
         print(f"Total sessions: {len(all_sessions)}")
-        print(f"Polecat sessions: {len(polecats)}")
-        if polecats:
-            for name in sorted(polecats):
+        print(f"Active polecats: {len(active)}")
+        if active:
+            for name in sorted(active):
+                print(f"  - {name}")
+        if stale:
+            print(f"Stale polecats (idle): {len(stale)}")
+            for name in sorted(stale):
                 print(f"  - {name}")
         print(f"Infrastructure: {len(infra)}")
         if args.verbose and infra:

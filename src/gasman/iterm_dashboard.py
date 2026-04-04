@@ -26,6 +26,8 @@ class Dashboard:
         self.watcher = TmuxWatcher(config)
         # Maps session name -> iTerm2 session ID
         self._pane_map: dict[str, str] = {}
+        # The mayor's (original) iTerm2 session — always stays leftmost
+        self._mayor_session_id: str | None = None
 
     async def start(self):
         """Start the dashboard: set up layout and begin watching."""
@@ -37,6 +39,8 @@ class Dashboard:
 
         self._window = window
         self._main_tab = window.current_tab
+        # Pin the mayor's session (the current/leftmost pane at startup)
+        self._mayor_session_id = self._main_tab.current_session.session_id
 
         socket = self.watcher.socket_name
         if not socket:
@@ -76,25 +80,27 @@ class Dashboard:
             return
 
         try:
-            # Find or create the right-side split
-            tab = self._main_tab
-            current_session = tab.current_session
+            app = await iterm2.async_get_app(self.connection)
 
             # Split horizontally (right side) for the first polecat,
             # vertically within the right column for subsequent ones
             if not self._pane_map:
-                # First polecat: split the main pane horizontally
-                new_session = await current_session.async_split_pane(
-                    vertical=True,  # side-by-side
+                # First polecat: split the mayor's pane to the right
+                mayor_session = app.get_session_by_id(self._mayor_session_id)
+                if mayor_session is None:
+                    mayor_session = self._main_tab.current_session
+                new_session = await mayor_session.async_split_pane(
+                    vertical=True,  # side-by-side (polecat goes right)
                 )
             else:
                 # Subsequent: split the last polecat pane vertically
                 last_session_id = list(self._pane_map.values())[-1]
-                app = await iterm2.async_get_app(self.connection)
                 target = app.get_session_by_id(last_session_id)
                 if target is None:
-                    # Fallback: split the current session
-                    target = tab.current_session
+                    # Fallback: split the mayor's pane
+                    target = app.get_session_by_id(self._mayor_session_id)
+                    if target is None:
+                        target = self._main_tab.current_session
                 new_session = await target.async_split_pane(
                     vertical=False,  # stack vertically in right column
                 )

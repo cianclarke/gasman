@@ -36,6 +36,50 @@ def list_tmux_sessions(socket_name: str) -> set[str]:
         return set()
 
 
+# Process names that indicate an active agent (not an idle shell)
+ACTIVE_PROCESS_NAMES = {"claude", "codex", "node", "python", "python3"}
+
+# Shell names that indicate an idle prompt
+IDLE_SHELL_NAMES = {"bash", "zsh", "sh", "fish", "login"}
+
+
+def is_session_active(socket_name: str, session_name: str) -> bool:
+    """Check if a tmux session has an active agent process running.
+
+    Returns True if the session's pane is running a known agent process
+    (claude, codex, etc.), False if it's just an idle shell prompt.
+    """
+    try:
+        result = subprocess.run(
+            [
+                "tmux", "-L", socket_name,
+                "list-panes", "-t", session_name,
+                "-F", "#{pane_current_command}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode != 0:
+            return False
+        commands = {
+            line.strip().lower()
+            for line in result.stdout.splitlines()
+            if line.strip()
+        }
+        # Active if any pane is running a non-shell process
+        for cmd in commands:
+            if cmd in ACTIVE_PROCESS_NAMES:
+                return True
+            if cmd not in IDLE_SHELL_NAMES:
+                # Unknown process — assume active (conservative)
+                return True
+        return False
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        # Can't check — assume active to avoid premature removal
+        return True
+
+
 class TmuxWatcher:
     """Polls the GT tmux socket for polecat session changes."""
 
@@ -52,12 +96,23 @@ class TmuxWatcher:
         return self._socket_name
 
     def _get_polecat_sessions(self) -> set[str]:
-        """Get the current set of polecat sessions."""
+        """Get the current set of actively working polecat sessions.
+
+        Filters out sessions that match polecat naming but are idle
+        (no active agent process running).
+        """
         socket = self._find_socket()
         if not socket:
             return set()
         all_sessions = list_tmux_sessions(socket)
-        return {s for s in all_sessions if is_polecat_session(s, self.config)}
+        polecats = {s for s in all_sessions if is_polecat_session(s, self.config)}
+        active = set()
+        for s in polecats:
+            if is_session_active(socket, s):
+                active.add(s)
+            else:
+                log.debug("Filtering stale polecat session: %s", s)
+        return active
 
     async def watch(self, callback):
         """Watch for session changes, calling callback(SessionEvent) on each.
