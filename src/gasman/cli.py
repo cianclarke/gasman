@@ -5,6 +5,8 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import shlex
+import subprocess
 import sys
 from pathlib import Path
 
@@ -34,8 +36,57 @@ def setup_logging(verbose: bool = False):
     logging.basicConfig(level=level, handlers=[handler])
 
 
+def _build_foreground_cmd(args) -> str:
+    """Build the 'gasman start --foreground' command string from current args."""
+    parts = [sys.executable, "-m", "gasman", "start", "--foreground"]
+    if args.verbose:
+        parts.insert(3, "--verbose")
+    if args.config:
+        parts.insert(3, "--config")
+        parts.insert(4, args.config)
+    if args.poll:
+        parts.extend(["--poll", str(args.poll)])
+    if args.font_size:
+        parts.extend(["--font-size", str(args.font_size)])
+    return " ".join(shlex.quote(p) for p in parts)
+
+
+def _open_iterm_tab(command: str) -> bool:
+    """Open a new iTerm2 tab and run the given command in it.
+
+    Uses AppleScript to create a new tab in the current iTerm2 window,
+    then sends the command to execute. Returns True on success.
+    """
+    # Escape for AppleScript string literal (backslash and double-quote)
+    escaped = command.replace("\\", "\\\\").replace('"', '\\"')
+    applescript = f'''
+    tell application "iTerm2"
+        tell current window
+            set newTab to (create tab with default profile)
+            tell current session of newTab
+                write text "{escaped}"
+            end tell
+        end tell
+    end tell
+    '''
+    try:
+        result = subprocess.run(
+            ["osascript", "-e", applescript],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        return result.returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
 def cmd_start(args):
-    """Start the gasman dashboard (foreground, Ctrl+C to quit)."""
+    """Start the gasman dashboard.
+
+    Default: opens a new iTerm2 tab for the dashboard and returns immediately.
+    With --foreground: runs the dashboard in the current terminal (Ctrl+C to quit).
+    """
     _ensure_gasman_dir()
 
     # Check if already running
@@ -48,6 +99,17 @@ def cmd_start(args):
         except (ProcessLookupError, ValueError):
             PID_FILE.unlink(missing_ok=True)
 
+    # Default mode: relocate to a new iTerm2 tab
+    if not args.foreground:
+        fg_cmd = _build_foreground_cmd(args)
+        if _open_iterm_tab(fg_cmd):
+            print("gasman started in new tab.")
+            return
+        else:
+            print("Failed to open iTerm2 tab. Falling back to foreground mode.",
+                  file=sys.stderr)
+
+    # Foreground mode: run the dashboard directly
     config = Config.load(Path(args.config) if args.config else None)
 
     if args.poll:
@@ -160,7 +222,9 @@ def main():
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    start_p = sub.add_parser("start", help="Start the dashboard (foreground, Ctrl+C to quit)")
+    start_p = sub.add_parser("start", help="Start the dashboard in a new iTerm2 tab")
+    start_p.add_argument("--foreground", action="store_true",
+                         help="Run in the current terminal instead of opening a new tab")
     start_p.add_argument("--poll", type=float, help="Poll interval in seconds")
     start_p.add_argument("--font-size", type=int, help="Font size for polecat tabs")
     start_p.set_defaults(func=cmd_start)
