@@ -93,14 +93,6 @@ class Dashboard:
             profile = await session.async_get_profile()
             await profile.async_set_allow_title_setting(False)
 
-            if self.config.font_size:
-                current_font = await profile.async_get_normal_font()
-                # Extract font name (e.g. "Monaco 12" -> "Monaco")
-                font_name = current_font.rsplit(" ", 1)[0] if current_font else "Monaco"
-                await profile.async_set_normal_font(
-                    f"{font_name} {self.config.font_size}"
-                )
-
             self._tab_map[session_name] = tab.tab_id
             log.info("New polecat: %s", session_name)
 

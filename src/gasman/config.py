@@ -31,8 +31,6 @@ class Config:
     tmux_socket_glob: str = "gt-*"
     # Poll interval in seconds for tmux session changes
     poll_interval: float = 2.0
-    # Font size for polecat panes
-    font_size: int = 11
     # Polecat session filter patterns (regex). Empty = match all non-infra.
     polecat_patterns: list[str] = field(default_factory=list)
     # Rig prefixes to watch. Empty = watch all.
@@ -51,7 +49,6 @@ class Config:
         return cls(
             tmux_socket_glob=data.get("tmux_socket_glob", cls.tmux_socket_glob),
             poll_interval=data.get("poll_interval", cls.poll_interval),
-            font_size=data.get("font_size", cls.font_size),
             polecat_patterns=data.get("polecat_patterns", []),
             rig_filter=data.get("rig_filter", []),
         )

@@ -62,8 +62,6 @@ def _build_foreground_cmd(args) -> str:
         parts.insert(2, args.config)
     if args.poll:
         parts.extend(["--poll", str(args.poll)])
-    if args.font_size:
-        parts.extend(["--font-size", str(args.font_size)])
     return " ".join(shlex.quote(p) for p in parts)
 
 
@@ -130,9 +128,6 @@ def cmd_start(args):
 
     if args.poll:
         config.poll_interval = args.poll
-    if args.font_size:
-        config.font_size = args.font_size
-
     setup_logging(args.verbose)
     log = logging.getLogger(__name__)
 
@@ -242,7 +237,6 @@ def main():
     start_p.add_argument("--foreground", action="store_true",
                          help="Run in the current terminal instead of opening a new tab")
     start_p.add_argument("--poll", type=float, help="Poll interval in seconds")
-    start_p.add_argument("--font-size", type=int, help="Font size for polecat tabs")
     start_p.set_defaults(func=cmd_start)
 
     stop_p = sub.add_parser("stop", help="Stop the dashboard")

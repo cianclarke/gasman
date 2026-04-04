@@ -55,9 +55,6 @@ tmux_socket_glob: "gt-*"
 # How often to check for session changes (seconds)
 poll_interval: 2.0
 
-# Font size for polecat tabs
-font_size: 11
-
 # Only watch specific rigs (empty = all rigs)
 rig_filter:
   - "ga-"
