@@ -1,25 +1,17 @@
 # gasman
 
-iTerm2 polecat dashboard with auto-spawn panes for Gas Town.
+iTerm2 polecat dashboard for Gas Town.
 
-When a polecat session starts in the GT tmux socket, gasman automatically
-creates a read-only iTerm2 split pane showing the polecat's streaming output.
-When the polecat completes, its pane closes automatically.
+Runs in the foreground and watches for polecat tmux sessions. When a new polecat
+spawns, gasman opens a new iTerm2 tab with a read-only view of the session.
+When the polecat finishes, its tab closes automatically. Ctrl+C closes all
+polecat tabs and exits.
 
 ## Layout
 
-```
-+------------------+------------------+
-|                  | polecat: ar-obs  |
-|    Mayor /       +------------------+
-|    User Term     | polecat: ga-obs  |
-|    (left pane)   +------------------+
-|                  | polecat: ha-nux  |
-+------------------+------------------+
-```
-
-The user's terminal stays in the left pane. Polecats tile vertically on the
-right. Supports 3-10+ concurrent polecats across all rigs.
+Each polecat gets its own iTerm2 tab, titled with the polecat session name.
+The tab where gasman runs shows the watch log. Your mayor/user session lives
+in a separate tab.
 
 ## Install
 
@@ -39,7 +31,7 @@ Enable Python API).
 ## Usage
 
 ```bash
-# Start watching for polecat sessions
+# Start watching (foreground, Ctrl+C to quit)
 gasman start
 
 # Start with custom poll interval
@@ -48,7 +40,7 @@ gasman start --poll 1.0
 # Check current status (works without iTerm2)
 gasman status
 
-# Stop the dashboard
+# Stop a running gasman from another terminal
 gasman stop
 ```
 
@@ -63,7 +55,7 @@ tmux_socket_glob: "gt-*"
 # How often to check for session changes (seconds)
 poll_interval: 2.0
 
-# Font size for polecat panes
+# Font size for polecat tabs
 font_size: 11
 
 # Only watch specific rigs (empty = all rigs)
@@ -80,12 +72,11 @@ polecat_patterns: []
 1. Polls the GT tmux socket (`/tmp/tmux-$UID/gt-*`) for session changes
 2. Identifies polecat sessions by excluding infrastructure agents (witness,
    refinery, mayor, etc.)
-3. Uses the iTerm2 Python API to create/destroy split panes
-4. Polecat panes attach to tmux in read-only mode (`-r`) so you can't
-   accidentally type into them
+3. Uses the iTerm2 Python API to create/close tabs
+4. Polecat tabs attach to tmux in read-only mode (`-r`)
+5. On Ctrl+C, all polecat tabs are closed before exit
 
 ## Cross-rig support
 
-Gasman watches all sessions on the GT tmux socket, which includes all rigs
-(arby, harvesty, gastown, etc.). Use `rig_filter` in config to limit to
-specific rigs.
+Gasman watches all sessions on the GT tmux socket, which includes all rigs.
+Use `rig_filter` in config to limit to specific rigs.

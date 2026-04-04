@@ -1,9 +1,10 @@
-"""iTerm2 Python API pane management for the polecat dashboard."""
+"""iTerm2 tab management for the polecat dashboard."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import signal
 
 import iterm2
 
@@ -14,23 +15,21 @@ log = logging.getLogger(__name__)
 
 
 class Dashboard:
-    """Manages iTerm2 panes for polecat sessions.
+    """Manages iTerm2 tabs for polecat sessions.
 
-    Layout: Mayor/user terminal stays in the left pane. Polecats tile
-    vertically on the right side via horizontal splits.
+    Each polecat gets its own tab with a read-only tmux attach.
+    Ctrl+C closes all polecat tabs and exits cleanly.
     """
 
     def __init__(self, config: Config, connection: iterm2.Connection):
         self.config = config
         self.connection = connection
         self.watcher = TmuxWatcher(config)
-        # Maps session name -> iTerm2 session ID
-        self._pane_map: dict[str, str] = {}
-        # The mayor's (original) iTerm2 session — always stays leftmost
-        self._mayor_session_id: str | None = None
+        # Maps polecat session name -> iTerm2 tab ID
+        self._tab_map: dict[str, str] = {}
 
     async def start(self):
-        """Start the dashboard: set up layout and begin watching."""
+        """Start the dashboard: begin watching for polecats."""
         app = await iterm2.async_get_app(self.connection)
         window = app.current_terminal_window
         if not window:
@@ -38,127 +37,126 @@ class Dashboard:
             return
 
         self._window = window
-        self._main_tab = window.current_tab
-        # Pin the mayor's session (the current/leftmost pane at startup)
-        self._mayor_session_id = self._main_tab.current_session.session_id
 
         socket = self.watcher.socket_name
         if not socket:
-            log.warning("No GT tmux socket found matching '%s'", self.config.tmux_socket_glob)
-            log.info("Waiting for tmux socket to appear...")
-
-        # Do NOT scan for existing polecat sessions on startup.
-        # Only react to NEW sessions appearing after gasman starts.
-        # The watcher seeds _known_sessions so existing sessions are ignored.
+            log.info("Waiting for tmux socket...")
 
         log.info(
-            "Dashboard started. Watching for polecats (socket pattern: %s, poll: %.1fs)",
-            self.config.tmux_socket_glob,
+            "Watching for polecats (poll: %.1fs). Ctrl+C to quit.",
             self.config.poll_interval,
         )
 
-        # Begin watching for lifecycle events
         await self.watcher.watch(self._handle_event)
 
     async def _handle_event(self, event: SessionEvent):
         """Handle a polecat spawn or exit event."""
         if event.event_type == "spawn":
-            await self._spawn_pane(event.name)
+            await self._open_tab(event.name)
         elif event.event_type == "exit":
-            await self._close_pane(event.name)
+            await self._close_tab(event.name)
 
-    async def _spawn_pane(self, session_name: str):
-        """Create a new iTerm2 pane for a polecat session."""
-        if session_name in self._pane_map:
-            log.debug("Pane already exists for %s", session_name)
+    async def _open_tab(self, session_name: str):
+        """Create a new iTerm2 tab for a polecat session."""
+        if session_name in self._tab_map:
             return
 
         socket = self.watcher.socket_name
         if not socket:
-            log.warning("Cannot spawn pane for %s: no tmux socket", session_name)
+            log.warning("Cannot open tab for %s: no tmux socket", session_name)
             return
 
         try:
             app = await iterm2.async_get_app(self.connection)
+            window = app.current_terminal_window
+            if not window:
+                log.error("No iTerm2 window available")
+                return
 
-            # Split horizontally (right side) for the first polecat,
-            # vertically within the right column for subsequent ones
-            if not self._pane_map:
-                # First polecat: split the mayor's pane to the right
-                mayor_session = app.get_session_by_id(self._mayor_session_id)
-                if mayor_session is None:
-                    mayor_session = self._main_tab.current_session
-                new_session = await mayor_session.async_split_pane(
-                    vertical=True,  # side-by-side (polecat goes right)
-                )
-            else:
-                # Subsequent: split the last polecat pane vertically
-                last_session_id = list(self._pane_map.values())[-1]
-                target = app.get_session_by_id(last_session_id)
-                if target is None:
-                    # Fallback: split the mayor's pane
-                    target = app.get_session_by_id(self._mayor_session_id)
-                    if target is None:
-                        target = self._main_tab.current_session
-                new_session = await target.async_split_pane(
-                    vertical=False,  # stack vertically in right column
-                )
+            tab = await window.async_create_tab()
+            session = tab.current_session
 
-            # Attach to the polecat's tmux session in read-only mode
+            # Attach read-only to the polecat's tmux session
             attach_cmd = f"tmux -L {socket} attach-session -t {session_name} -r"
-            await new_session.async_send_text(attach_cmd + "\n")
+            await session.async_send_text(attach_cmd + "\n")
 
-            # Set the pane title and prevent tmux from overriding it
-            await new_session.async_set_name(session_name)
-            profile = await new_session.async_get_profile()
+            # Set tab title and lock it
+            await session.async_set_name(session_name)
+            profile = await session.async_get_profile()
             await profile.async_set_allow_title_setting(False)
 
-            # Apply font size if configured
             if self.config.font_size:
                 await profile.async_set_normal_font_size(self.config.font_size)
 
-            self._pane_map[session_name] = new_session.session_id
-            log.info("Spawned pane for %s (id: %s)", session_name, new_session.session_id)
+            self._tab_map[session_name] = tab.tab_id
+            log.info("New polecat: %s", session_name)
 
         except Exception:
-            log.exception("Failed to spawn pane for %s", session_name)
+            log.exception("Failed to open tab for %s", session_name)
 
-    async def _close_pane(self, session_name: str):
-        """Close the iTerm2 pane for a completed polecat session."""
-        session_id = self._pane_map.pop(session_name, None)
-        if not session_id:
-            log.debug("No pane to close for %s", session_name)
+    async def _close_tab(self, session_name: str):
+        """Close the iTerm2 tab for a finished polecat."""
+        tab_id = self._tab_map.pop(session_name, None)
+        if not tab_id:
             return
 
         try:
             app = await iterm2.async_get_app(self.connection)
-            session = app.get_session_by_id(session_id)
-            if session:
-                await session.async_close(force=True)
-                log.info("Closed pane for %s", session_name)
-            else:
-                log.debug("Pane already gone for %s (id: %s)", session_name, session_id)
+            for window in app.terminal_windows:
+                for tab in window.tabs:
+                    if tab.tab_id == tab_id:
+                        await tab.async_close(force=True)
+                        log.info("Closed tab: %s", session_name)
+                        return
+            log.debug("Tab already gone: %s", session_name)
         except Exception:
-            log.exception("Failed to close pane for %s", session_name)
+            log.exception("Failed to close tab for %s", session_name)
+
+    async def close_all_tabs(self):
+        """Close ALL polecat tabs (called on Ctrl+C / shutdown)."""
+        if not self._tab_map:
+            return
+
+        names = list(self._tab_map.keys())
+        log.info("Closing %d polecat tab(s)...", len(names))
+
+        for name in names:
+            await self._close_tab(name)
 
     def stop(self):
-        """Stop the dashboard."""
+        """Signal the watcher to stop."""
         self.watcher.stop()
 
 
 def run_dashboard(config: Config):
-    """Main entry point: connect to iTerm2 and run the dashboard."""
+    """Connect to iTerm2 and run the dashboard. Blocks until Ctrl+C."""
     log.info("Connecting to iTerm2...")
 
     async def _main(connection: iterm2.Connection):
         dashboard = Dashboard(config, connection)
+
+        # Wire up SIGINT to close all tabs before exiting
+        loop = asyncio.get_running_loop()
+
+        def _on_sigint():
+            dashboard.stop()
+            # Schedule tab cleanup then stop the loop
+            asyncio.ensure_future(_shutdown(dashboard, loop))
+
+        loop.add_signal_handler(signal.SIGINT, _on_sigint)
+
         try:
             await dashboard.start()
         except asyncio.CancelledError:
-            dashboard.stop()
-            log.info("Dashboard stopped.")
-        except KeyboardInterrupt:
-            dashboard.stop()
-            log.info("Dashboard stopped by user.")
+            pass
+
+    async def _shutdown(dashboard: Dashboard, loop: asyncio.AbstractEventLoop):
+        """Clean up tabs and stop the event loop."""
+        try:
+            await dashboard.close_all_tabs()
+        except Exception:
+            log.exception("Error during tab cleanup")
+        finally:
+            loop.stop()
 
     iterm2.run_until_complete(_main)

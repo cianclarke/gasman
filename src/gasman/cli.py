@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import logging
 import os
-import signal
 import sys
 from pathlib import Path
 
@@ -22,60 +21,21 @@ def _ensure_gasman_dir():
     GASMAN_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def setup_logging(verbose: bool = False, to_file: bool = False):
-    """Configure logging. If to_file, writes to ~/.gasman/gasman.log."""
+def setup_logging(verbose: bool = False):
+    """Configure logging to stderr for foreground operation."""
     level = logging.DEBUG if verbose else logging.INFO
-    handlers: list[logging.Handler] = []
-
-    if to_file:
-        _ensure_gasman_dir()
-        handler = logging.FileHandler(str(LOG_FILE), mode="a")
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [gasman] %(levelname)s %(message)s",
-                datefmt="%Y-%m-%d %H:%M:%S",
-            )
+    handler = logging.StreamHandler()
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s [gasman] %(message)s",
+            datefmt="%H:%M:%S",
         )
-        handlers.append(handler)
-    else:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter(
-                "%(asctime)s [gasman] %(levelname)s %(message)s",
-                datefmt="%H:%M:%S",
-            )
-        )
-        handlers.append(handler)
-
-    logging.basicConfig(level=level, handlers=handlers)
-
-
-def _daemonize():
-    """Fork the process into a background daemon (double-fork)."""
-    # First fork
-    pid = os.fork()
-    if pid > 0:
-        # Parent exits — child continues
-        sys.exit(0)
-
-    # Decouple from parent environment
-    os.setsid()
-
-    # Second fork — prevent zombie and ensure no controlling terminal
-    pid = os.fork()
-    if pid > 0:
-        sys.exit(0)
-
-    # Redirect stdin/stdout/stderr to /dev/null
-    devnull = os.open(os.devnull, os.O_RDWR)
-    os.dup2(devnull, 0)
-    os.dup2(devnull, 1)
-    os.dup2(devnull, 2)
-    os.close(devnull)
+    )
+    logging.basicConfig(level=level, handlers=[handler])
 
 
 def cmd_start(args):
-    """Start the gasman dashboard."""
+    """Start the gasman dashboard (foreground, Ctrl+C to quit)."""
     _ensure_gasman_dir()
 
     # Check if already running
@@ -86,39 +46,26 @@ def cmd_start(args):
             print(f"gasman is already running (PID {existing_pid})")
             sys.exit(1)
         except (ProcessLookupError, ValueError):
-            # Stale PID file — clean up
             PID_FILE.unlink(missing_ok=True)
 
     config = Config.load(Path(args.config) if args.config else None)
 
-    # Override config with CLI args
     if args.poll:
         config.poll_interval = args.poll
     if args.font_size:
         config.font_size = args.font_size
 
-    if not args.foreground:
-        print(f"Starting gasman daemon... (log: {LOG_FILE})")
-        _daemonize()
-
-    # After daemonize (or in foreground mode), set up logging
-    setup_logging(args.verbose, to_file=not args.foreground)
+    setup_logging(args.verbose)
     log = logging.getLogger(__name__)
 
-    # Check for tmux socket
     socket = find_tmux_socket(config.tmux_socket_glob)
     if socket:
         log.info("Found GT tmux socket: %s", socket)
     else:
-        log.warning(
-            "No GT tmux socket found matching '%s'. Will keep looking...",
-            config.tmux_socket_glob,
-        )
+        log.info("No tmux socket yet (pattern: %s). Waiting...", config.tmux_socket_glob)
 
-    # Write PID file
     PID_FILE.write_text(str(os.getpid()))
 
-    # Import here to defer iterm2 dependency check
     from .iterm_dashboard import run_dashboard
 
     try:
@@ -132,7 +79,9 @@ def cmd_start(args):
 
 
 def cmd_stop(args):
-    """Stop a running gasman dashboard and clean up panes."""
+    """Stop a running gasman dashboard."""
+    import signal as _signal
+
     setup_logging(args.verbose)
     log = logging.getLogger(__name__)
 
@@ -142,8 +91,8 @@ def cmd_stop(args):
 
     pid = int(PID_FILE.read_text().strip())
     try:
-        os.kill(pid, signal.SIGTERM)
-        log.info("Sent SIGTERM to gasman (PID %d)", pid)
+        os.kill(pid, _signal.SIGINT)
+        log.info("Sent SIGINT to gasman (PID %d) — tabs will be cleaned up", pid)
     except ProcessLookupError:
         log.warning("Process %d not found. Cleaning up stale PID file.", pid)
     PID_FILE.unlink(missing_ok=True)
@@ -211,13 +160,9 @@ def main():
 
     sub = parser.add_subparsers(dest="command", required=True)
 
-    start_p = sub.add_parser("start", help="Start the dashboard")
+    start_p = sub.add_parser("start", help="Start the dashboard (foreground, Ctrl+C to quit)")
     start_p.add_argument("--poll", type=float, help="Poll interval in seconds")
-    start_p.add_argument("--font-size", type=int, help="Font size for polecat panes")
-    start_p.add_argument(
-        "--foreground", "-f", action="store_true",
-        help="Run in foreground (don't daemonize)",
-    )
+    start_p.add_argument("--font-size", type=int, help="Font size for polecat tabs")
     start_p.set_defaults(func=cmd_start)
 
     stop_p = sub.add_parser("stop", help="Stop the dashboard")
