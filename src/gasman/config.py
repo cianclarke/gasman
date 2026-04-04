@@ -93,7 +93,6 @@ def is_polecat_session(session_name: str, config: Config) -> bool:
 
     # Apply rig filter if configured
     if config.rig_filter:
-        rig_prefix = parts[0] + "-" if len(parts) == 2 else ""
         if not any(session_name.startswith(r) for r in config.rig_filter):
             return False
 
