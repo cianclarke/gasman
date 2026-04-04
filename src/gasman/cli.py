@@ -12,22 +12,82 @@ from pathlib import Path
 from .config import Config, find_tmux_socket
 
 
-PID_FILE = Path.home() / ".gasman.pid"
+GASMAN_DIR = Path.home() / ".gasman"
+PID_FILE = GASMAN_DIR / "gasman.pid"
+LOG_FILE = GASMAN_DIR / "gasman.log"
 
 
-def setup_logging(verbose: bool = False):
+def _ensure_gasman_dir():
+    """Create ~/.gasman/ if it doesn't exist."""
+    GASMAN_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def setup_logging(verbose: bool = False, to_file: bool = False):
+    """Configure logging. If to_file, writes to ~/.gasman/gasman.log."""
     level = logging.DEBUG if verbose else logging.INFO
-    logging.basicConfig(
-        level=level,
-        format="%(asctime)s [gasman] %(levelname)s %(message)s",
-        datefmt="%H:%M:%S",
-    )
+    handlers: list[logging.Handler] = []
+
+    if to_file:
+        _ensure_gasman_dir()
+        handler = logging.FileHandler(str(LOG_FILE), mode="a")
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s [gasman] %(levelname)s %(message)s",
+                datefmt="%Y-%m-%d %H:%M:%S",
+            )
+        )
+        handlers.append(handler)
+    else:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter(
+                "%(asctime)s [gasman] %(levelname)s %(message)s",
+                datefmt="%H:%M:%S",
+            )
+        )
+        handlers.append(handler)
+
+    logging.basicConfig(level=level, handlers=handlers)
+
+
+def _daemonize():
+    """Fork the process into a background daemon (double-fork)."""
+    # First fork
+    pid = os.fork()
+    if pid > 0:
+        # Parent exits — child continues
+        sys.exit(0)
+
+    # Decouple from parent environment
+    os.setsid()
+
+    # Second fork — prevent zombie and ensure no controlling terminal
+    pid = os.fork()
+    if pid > 0:
+        sys.exit(0)
+
+    # Redirect stdin/stdout/stderr to /dev/null
+    devnull = os.open(os.devnull, os.O_RDWR)
+    os.dup2(devnull, 0)
+    os.dup2(devnull, 1)
+    os.dup2(devnull, 2)
+    os.close(devnull)
 
 
 def cmd_start(args):
     """Start the gasman dashboard."""
-    setup_logging(args.verbose)
-    log = logging.getLogger(__name__)
+    _ensure_gasman_dir()
+
+    # Check if already running
+    if PID_FILE.exists():
+        try:
+            existing_pid = int(PID_FILE.read_text().strip())
+            os.kill(existing_pid, 0)
+            print(f"gasman is already running (PID {existing_pid})")
+            sys.exit(1)
+        except (ProcessLookupError, ValueError):
+            # Stale PID file — clean up
+            PID_FILE.unlink(missing_ok=True)
 
     config = Config.load(Path(args.config) if args.config else None)
 
@@ -36,6 +96,14 @@ def cmd_start(args):
         config.poll_interval = args.poll
     if args.font_size:
         config.font_size = args.font_size
+
+    if not args.foreground:
+        print(f"Starting gasman daemon... (log: {LOG_FILE})")
+        _daemonize()
+
+    # After daemonize (or in foreground mode), set up logging
+    setup_logging(args.verbose, to_file=not args.foreground)
+    log = logging.getLogger(__name__)
 
     # Check for tmux socket
     socket = find_tmux_socket(config.tmux_socket_glob)
@@ -57,12 +125,14 @@ def cmd_start(args):
         run_dashboard(config)
     except KeyboardInterrupt:
         log.info("Shutting down.")
+    except Exception:
+        log.exception("Dashboard crashed")
     finally:
         PID_FILE.unlink(missing_ok=True)
 
 
 def cmd_stop(args):
-    """Stop a running gasman dashboard."""
+    """Stop a running gasman dashboard and clean up panes."""
     setup_logging(args.verbose)
     log = logging.getLogger(__name__)
 
@@ -98,6 +168,8 @@ def cmd_status(args):
             pass
 
     print(f"Dashboard: {'running (PID {})'.format(pid) if running else 'stopped'}")
+    print(f"PID file: {PID_FILE}")
+    print(f"Log file: {LOG_FILE}")
     print(f"Tmux socket: {socket or 'not found'}")
 
     if socket:
@@ -142,6 +214,10 @@ def main():
     start_p = sub.add_parser("start", help="Start the dashboard")
     start_p.add_argument("--poll", type=float, help="Poll interval in seconds")
     start_p.add_argument("--font-size", type=int, help="Font size for polecat panes")
+    start_p.add_argument(
+        "--foreground", "-f", action="store_true",
+        help="Run in foreground (don't daemonize)",
+    )
     start_p.set_defaults(func=cmd_start)
 
     stop_p = sub.add_parser("stop", help="Stop the dashboard")
