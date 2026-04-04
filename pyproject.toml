@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.backends._legacy:_Backend"
+
+[project]
+name = "gasman"
+version = "0.1.0"
+description = "iTerm2 polecat dashboard with auto-spawn panes for Gas Town"
+requires-python = ">=3.10"
+dependencies = [
+    "iterm2>=2.7",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+gasman = "gasman.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
