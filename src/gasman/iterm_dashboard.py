@@ -73,18 +73,20 @@ class Dashboard:
                 log.error("No iTerm2 window available")
                 return
 
-            tab = await window.async_create_tab()
-            session = tab.current_session
-
             # Remove tmux chrome (status bar, borders) and fix size mismatch
             # before attaching. -d detaches other clients holding old dimensions.
+            # Use async_create_tab(command=...) to run tmux directly, bypassing
+            # the login shell profile (.zshrc) which triggers GT shell hooks and
+            # launches unwanted agent sessions.
             tmux = f"tmux -L {socket}"
-            await session.async_send_text(
+            tmux_cmd = (
                 f"{tmux} set -t {session_name} status off \\; "
                 f"set -g aggressive-resize on \\; "
                 f"set -g window-size latest \\; "
-                f"attach-session -t {session_name} -d -r\n"
+                f"attach-session -t {session_name} -d -r"
             )
+            tab = await window.async_create_tab(command=tmux_cmd)
+            session = tab.current_session
 
             # Set tab title and lock it
             await session.async_set_name(session_name)
